@@ -315,4 +315,433 @@
         ];
 
         let stores = [
-            { id: 'S1', name
+            { id: 'S1', name: '«Анвар» супермаркеті', region: 'Қызылорда қ.' },
+            { id: 'S2', name: '«Small» супермаркеті', region: 'Қызылорда қ.' },
+            { id: 'S3', name: '«Сыбаға» орталық базары', region: 'Қызылорда қ.' },
+            { id: 'S4', name: '«Береке» дүкені', region: 'Шиелі ауданы' },
+            { id: 'S5', name: '«Арзан» әлеуметтік дүкені', region: 'Қазалы ауданы' }
+        ];
+
+        let records = [
+            { id: 1, productId: 'P1', storeId: 'S1', date: '2026-11-14', rawQty: 900, rawUnit: 'g', rawPrice: 450, stdPrice: 500, status: 'pending', note: '' },
+            { id: 2, productId: 'P1', storeId: 'S2', date: '2026-11-14', rawQty: 1, rawUnit: 'kg', rawPrice: 495, stdPrice: 495, status: 'pending', note: '' },
+            { id: 3, productId: 'P1', storeId: 'S3', date: '2026-11-14', rawQty: 1, rawUnit: 'kg', rawPrice: 480, stdPrice: 480, status: 'pending', note: '' },
+            { id: 4, productId: 'P1', storeId: 'S4', date: '2026-11-14', rawQty: 800, rawUnit: 'g', rawPrice: 464, stdPrice: 580, status: 'pending', note: '' },
+            { id: 5, productId: 'P1', storeId: 'S5', date: '2026-11-07', rawQty: 1, rawUnit: 'kg', rawPrice: 470, stdPrice: 470, status: 'pending', note: '' },
+            { id: 6, productId: 'P2', storeId: 'S1', date: '2026-11-14', rawQty: 900, rawUnit: 'ml', rawPrice: 675, stdPrice: 750, status: 'pending', note: '' },
+            { id: 7, productId: 'P2', storeId: 'S2', date: '2026-11-14', rawQty: 1, rawUnit: 'l', rawPrice: 740, stdPrice: 740, status: 'pending', note: '' },
+            { id: 8, productId: 'P2', storeId: 'S4', date: '2026-11-14', rawQty: 850, rawUnit: 'ml', rawPrice: 748, stdPrice: 880, status: 'pending', note: '' },
+            { id: 9, productId: 'P4', storeId: 'S1', date: '2026-11-14', rawQty: 10, rawUnit: 'pcs', rawPrice: 550, stdPrice: 55, status: 'pending', note: '' },
+            { id: 10, productId: 'P4', storeId: 'S3', date: '2026-11-14', rawQty: 30, rawUnit: 'pcs', rawPrice: 1560, stdPrice: 52, status: 'pending', note: '' }
+        ];
+
+        let chartInstance = null;
+
+        function standardizePrice(qty, unit, price, targetBaseUnit) {
+            let factor = 1;
+            if (unit === 'g' || unit === 'ml') factor = qty / 1000;
+            else if (unit === 'kg' || unit === 'l' || unit === 'pcs') factor = qty;
+            if (factor <= 0) return null;
+            return Math.round((price / factor) * 100) / 100;
+        }
+
+        function formatUnitLabel(u) {
+            const map = { g: 'г', kg: 'кг', ml: 'мл', l: 'л', pcs: 'дана' };
+            return map[u] || u;
+        }
+
+        function calculateMedian(values) {
+            if (!values.length) return 0;
+            const sorted = [...values].sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            return sorted.length % 2 !== 0 ? sorted[mid] : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100;
+        }
+
+        function init() {
+            populateSelects();
+            renderDirectories();
+            updateConversionPreview();
+            renderDashboard();
+            renderAnomalies();
+        }
+
+        function populateSelects() {
+            const prodOptions = products.map(p => `<option value="${p.id}">${p.name} (${p.baseUnit})</option>`).join('');
+            document.getElementById('filterProduct').innerHTML = prodOptions;
+            document.getElementById('entryProduct').innerHTML = prodOptions;
+
+            const storeOptions = stores.map(s => `<option value="${s.id}">${s.name} — ${s.region}</option>`).join('');
+            document.getElementById('entryStore').innerHTML = storeOptions;
+
+            const regions = [...new Set(stores.map(s => s.region))];
+            document.getElementById('filterRegion').innerHTML = '<option value="ALL">Барлық аумақтар</option>' +
+                regions.map(r => `<option value="${r}">${r}</option>`).join('');
+        }
+
+        function switchTab(tabId) {
+            ['dashboard', 'entry', 'anomalies', 'directories'].forEach(id => {
+                document.getElementById('view-' + id).classList.add('hidden');
+                const btn = document.getElementById('tab-' + id);
+                btn.classList.remove('tab-active');
+                btn.classList.add('tab-inactive');
+            });
+            document.getElementById('view-' + tabId).classList.remove('hidden');
+            const activeBtn = document.getElementById('tab-' + tabId);
+            activeBtn.classList.remove('tab-inactive');
+            activeBtn.classList.add('tab-active');
+
+            if (tabId === 'dashboard') renderDashboard();
+            if (tabId === 'anomalies') renderAnomalies();
+        }
+
+        function changeRole() {
+            const role = document.getElementById('roleSelect').value;
+            const badges = {
+                specialist: 'Мониторинг маманы режимі',
+                analyst: 'Талдаушы режимі',
+                head: 'Жауапты басшы режимі'
+            };
+            document.getElementById('roleBadge').textContent = badges[role];
+            renderAnomalies();
+        }
+
+        function renderDashboard() {
+            const prodId = document.getElementById('filterProduct').value;
+            const region = document.getElementById('filterRegion').value;
+            const period = document.getElementById('filterPeriod').value;
+            const product = products.find(p => p.id === prodId);
+
+            let filtered = records.filter(r => r.productId === prodId);
+            if (region !== 'ALL') {
+                filtered = filtered.filter(r => {
+                    const st = stores.find(s => s.id === r.storeId);
+                    return st && st.region === region;
+                });
+            }
+            if (period !== 'ALL') {
+                filtered = filtered.filter(r => r.date === period);
+            }
+
+            const prices = filtered.map(r => r.stdPrice);
+            const minVal = prices.length ? Math.min(...prices) : 0;
+            const maxVal = prices.length ? Math.max(...prices) : 0;
+            const medVal = calculateMedian(prices);
+
+            document.getElementById('kpiMin').textContent = prices.length ? `${minVal} ₸/${product.baseUnit}` : '—';
+            document.getElementById('kpiMedian').textContent = prices.length ? `${medVal} ₸/${product.baseUnit}` : '—';
+            document.getElementById('kpiMax').textContent = prices.length ? `${maxVal} ₸/${product.baseUnit}` : '—';
+
+            const maxRec = filtered.find(r => r.stdPrice === maxVal);
+            const maxStore = maxRec ? stores.find(s => s.id === maxRec.storeId)?.name : '—';
+            document.getElementById('kpiMaxStore').textContent = prices.length ? maxStore : 'Дерек жоқ';
+
+            let alertCount = 0;
+            const tbody = document.getElementById('dashboardTableBody');
+            tbody.innerHTML = '';
+
+            filtered.forEach(r => {
+                const st = stores.find(s => s.id === r.storeId);
+                const diffPct = medVal > 0 ? Math.round(((r.stdPrice - medVal) / medVal) * 1000) / 10 : 0;
+                const isAlert = diffPct > 10;
+                if (isAlert) alertCount++;
+
+                const badge = isAlert
+                    ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/20 text-rose-400">+${diffPct}% (Тексеру)</span>`
+                    : `<span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300">${diffPct > 0 ? '+' + diffPct : diffPct}%</span>`;
+
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="py-3 px-3">
+                            <div class="font-medium text-white">${st ? st.name : r.storeId}</div>
+                            <div class="text-xs text-slate-400">${st ? st.region : ''}</div>
+                        </td>
+                        <td class="py-3 px-3 text-slate-300 text-xs">${r.date}</td>
+                        <td class="py-3 px-3 text-slate-300">${r.rawPrice} ₸ / ${r.rawQty} ${formatUnitLabel(r.rawUnit)}</td>
+                        <td class="py-3 px-3 font-bold text-sky-400">${r.stdPrice} ₸/${product.baseUnit}</td>
+                        <td class="py-3 px-3">${badge}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('kpiTotal').textContent = filtered.length;
+            document.getElementById('kpiAlerts').textContent = `(${alertCount} ескерту)`;
+            updateChart(filtered, medVal, product.baseUnit);
+            updateAnomalyBadge();
+        }
+
+        function updateChart(data, median, baseUnit) {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            if (chartInstance) chartInstance.destroy();
+
+            const labels = data.map(r => stores.find(s => s.id === r.storeId)?.name.replace(/[«»]/g, '').split(' ')[0] || r.storeId);
+            const values = data.map(r => r.stdPrice);
+            const colors = values.map(v => (median > 0 && v > median * 1.1) ? '#f43f5e' : '#38bdf8');
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: `Баға (₸/${baseUnit})`,
+                        data: values,
+                        backgroundColor: colors,
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 11 } } }
+                    }
+                }
+            });
+        }
+
+        function updateConversionPreview() {
+            const prodId = document.getElementById('entryProduct').value;
+            const product = products.find(p => p.id === prodId);
+            const qty = parseFloat(document.getElementById('entryQty').value) || 0;
+            const unit = document.getElementById('entryUnit').value;
+            const price = parseFloat(document.getElementById('entryPrice').value) || 0;
+
+            const std = standardizePrice(qty, unit, price, product.baseUnit);
+            document.getElementById('conversionFormula').textContent = `${qty} ${formatUnitLabel(unit)} үшін ${price} ₸ → 1 ${product.baseUnit}`;
+            document.getElementById('conversionResult').textContent = std ? `${std} ₸/${product.baseUnit}` : 'Қате мән';
+        }
+
+        function addPriceRecord(e) {
+            e.preventDefault();
+            const productId = document.getElementById('entryProduct').value;
+            const storeId = document.getElementById('entryStore').value;
+            const rawQty = parseFloat(document.getElementById('entryQty').value);
+            const rawUnit = document.getElementById('entryUnit').value;
+            const rawPrice = parseFloat(document.getElementById('entryPrice').value);
+            const date = document.getElementById('entryDate').value;
+            const product = products.find(p => p.id === productId);
+
+            const feedback = document.getElementById('entryFeedback');
+            feedback.classList.remove('hidden', 'bg-rose-500/20', 'text-rose-300', 'bg-emerald-500/20', 'text-emerald-300');
+
+            if ((product.baseUnit === 'кг' && !['g', 'kg'].includes(rawUnit)) ||
+                (product.baseUnit === 'л' && !['ml', 'l'].includes(rawUnit)) ||
+                (product.baseUnit === 'дана' && rawUnit !== 'pcs')) {
+                feedback.classList.add('bg-rose-500/20', 'text-rose-300');
+                feedback.textContent = `Қате: «${product.name}» тауары үшін өлшем бірлігі (${product.baseUnit}) сәйкес келмейді!`;
+                return;
+            }
+
+            const isDuplicate = records.some(r => r.productId === productId && r.storeId === storeId && r.date === date && r.rawPrice === rawPrice);
+            if (isDuplicate) {
+                feedback.classList.add('bg-rose-500/20', 'text-rose-300');
+                feedback.textContent = 'Қайталанған жазба анықталды! Бұл дүкен мен күн бойынша дәл осындай баға бұрын енгізілген.';
+                return;
+            }
+
+            const stdPrice = standardizePrice(rawQty, rawUnit, rawPrice, product.baseUnit);
+            records.unshift({ id: Date.now(), productId, storeId, date, rawQty, rawUnit, rawPrice, stdPrice, status: 'pending', note: '' });
+
+            feedback.classList.add('bg-emerald-500/20', 'text-emerald-300');
+            feedback.textContent = `Сәтті сақталды! Біріздендірілген баға: ${stdPrice} ₸/${product.baseUnit}`;
+            updateAnomalyBadge();
+        }
+
+        function simulateBatchImport() {
+            const sampleRows = [
+                { productId: 'P1', storeId: 'S1', date: '2026-11-14', rawQty: 900, rawUnit: 'g', rawPrice: 450 },
+                { productId: 'P3', storeId: 'S2', date: '2026-11-14', rawQty: 2, rawUnit: 'kg', rawPrice: 480 },
+                { productId: 'P3', storeId: 'S4', date: '2026-11-14', rawQty: 1, rawUnit: 'kg', rawPrice: 310 },
+                { productId: 'P5', storeId: 'S3', date: '2026-11-14', rawQty: -5, rawUnit: 'kg', rawPrice: 400 }
+            ];
+
+            const logBox = document.getElementById('validationMessages');
+            logBox.innerHTML = '';
+
+            sampleRows.forEach((row, idx) => {
+                const prod = products.find(p => p.id === row.productId);
+                if (row.rawQty <= 0 || row.rawPrice <= 0) {
+                    logBox.innerHTML += `<div class="text-rose-400">❌ Жол #${idx + 1}: Теріс немесе нөлдік мән (қабылданбады).</div>`;
+                    return;
+                }
+                const dup = records.some(r => r.productId === row.productId && r.storeId === row.storeId && r.date === row.date && r.rawPrice === row.rawPrice);
+                if (dup) {
+                    logBox.innerHTML += `<div class="text-amber-400">⚠️ Жол #${idx + 1}: Қайталанған жазба өткізіп жіберілді (${prod.name}).</div>`;
+                    return;
+                }
+                const stdPrice = standardizePrice(row.rawQty, row.rawUnit, row.rawPrice, prod.baseUnit);
+                records.unshift({ id: Date.now() + idx, ...row, stdPrice, status: 'pending', note: '' });
+                logBox.innerHTML += `<div class="text-emerald-400">✅ Жол #${idx + 1}: Қабылданды → ${prod.name}: ${stdPrice} ₸/${prod.baseUnit}</div>`;
+            });
+            updateAnomalyBadge();
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const lines = e.target.result.split('\n').filter(l => l.trim());
+                const logBox = document.getElementById('validationMessages');
+                logBox.innerHTML = `<div class="text-sky-400">Файл оқылды: ${file.name} (${lines.length} жол)</div>`;
+                lines.forEach((line, idx) => {
+                    const parts = line.split(/[;,]/).map(s => s.trim());
+                    if (parts.length < 6) return;
+                    const [productId, storeId, date, qtyStr, rawUnit, priceStr] = parts;
+                    const prod = products.find(p => p.id === productId);
+                    const rawQty = parseFloat(qtyStr);
+                    const rawPrice = parseFloat(priceStr);
+                    if (!prod || isNaN(rawQty) || rawQty <= 0 || isNaN(rawPrice) || rawPrice <= 0) {
+                        logBox.innerHTML += `<div class="text-rose-400">❌ Жол #${idx + 1}: Дерек форматы қате.</div>`;
+                        return;
+                    }
+                    const stdPrice = standardizePrice(rawQty, rawUnit, rawPrice, prod.baseUnit);
+                    records.unshift({ id: Date.now() + idx, productId, storeId, date, rawQty, rawUnit, rawPrice, stdPrice, status: 'pending', note: '' });
+                    logBox.innerHTML += `<div class="text-emerald-400">✅ Жол #${idx + 1}: ${prod.name} — ${stdPrice} ₸/${prod.baseUnit}</div>`;
+                });
+                updateAnomalyBadge();
+            };
+            reader.readAsText(file);
+        }
+
+        function getAnomalies() {
+            const list = [];
+            products.forEach(prod => {
+                const prodRecords = records.filter(r => r.productId === prod.id);
+                const med = calculateMedian(prodRecords.map(r => r.stdPrice));
+                if (med <= 0) return;
+                prodRecords.forEach(r => {
+                    const diffPct = Math.round(((r.stdPrice - med) / med) * 1000) / 10;
+                    if (diffPct > 10) {
+                        list.push({ record: r, product: prod, median: med, diffPct });
+                    }
+                });
+            });
+            return list;
+        }
+
+        function updateAnomalyBadge() {
+            const anomalies = getAnomalies();
+            const pending = anomalies.filter(a => a.record.status === 'pending').length;
+            document.getElementById('anomalyCountBadge').textContent = pending;
+        }
+
+        function renderAnomalies() {
+            const anomalies = getAnomalies();
+            const container = document.getElementById('anomaliesList');
+
+            if (!anomalies.length) {
+                container.innerHTML = `<div class="text-sm text-slate-400 py-6 text-center">Қазіргі уақытта шекті мәннен асқан ауытқулар табылмады.</div>`;
+                return;
+            }
+
+            container.innerHTML = anomalies.map(({ record, product, median, diffPct }) => {
+                const store = stores.find(s => s.id === record.storeId);
+                const statusColors = {
+                    pending: 'border-amber-500/40 bg-amber-500/5',
+                    confirmed: 'border-rose-500/40 bg-rose-500/5',
+                    justified: 'border-emerald-500/40 bg-emerald-500/5'
+                };
+                const statusLabels = {
+                    pending: '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">Тексеру күтілуде</span>',
+                    confirmed: '<span class="text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-300">Расталды</span>',
+                    justified: '<span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Негізделген</span>'
+                };
+
+                return `
+                    <div class="p-4 rounded-xl border ${statusColors[record.status]} flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                        <div class="space-y-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="font-bold text-white text-sm">${product.name}</span>
+                                ${statusLabels[record.status]}
+                            </div>
+                            <div class="text-xs text-slate-300">
+                                Сауда нүктесі: <strong>${store ? store.name : record.storeId}</strong> (${store ? store.region : ''}) • Күні: ${record.date}
+                            </div>
+                            <div class="text-xs text-slate-400">
+                                Тіркелген баға: <strong class="text-rose-400">${record.stdPrice} ₸/${product.baseUnit}</strong>
+                                (Медиана: ${median} ₸/${product.baseUnit} | Ауытқу: <strong class="text-rose-400">+${diffPct}%</strong>)
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                            <input type="text" id="note-${record.id}" value="${record.note}" placeholder="Тексеру қорытындысы..." class="input-dark rounded-lg px-3 py-1.5 text-xs w-full sm:w-64">
+                            <button onclick="saveAnomalyDecision(${record.id}, 'justified')" class="bg-emerald-600/80 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+                                Негізделген
+                            </button>
+                            <button onclick="saveAnomalyDecision(${record.id}, 'confirmed')" class="bg-rose-600/80 hover:bg-rose-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+                                Растау
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function saveAnomalyDecision(recordId, status) {
+            const rec = records.find(r => r.id === recordId);
+            if (!rec) return;
+            rec.status = status;
+            rec.note = document.getElementById('note-' + recordId).value;
+            renderAnomalies();
+            updateAnomalyBadge();
+        }
+
+        function renderDirectories() {
+            document.getElementById('productDirList').innerHTML = products.map(p => `
+                <li class="py-2.5 flex justify-between items-center">
+                    <span class="text-slate-200">${p.name}</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-sky-400">1 ${p.baseUnit}</span>
+                </li>
+            `).join('');
+
+            document.getElementById('storeDirList').innerHTML = stores.map(s => `
+                <li class="py-2.5 flex justify-between items-center">
+                    <span class="text-slate-200">${s.name}</span>
+                    <span class="text-xs text-slate-400">${s.region}</span>
+                </li>
+            `).join('');
+        }
+
+        function addProduct(e) {
+            e.preventDefault();
+            const name = document.getElementById('newProdName').value.trim();
+            const baseUnit = document.getElementById('newProdBase').value;
+            if (!name) return;
+            products.push({ id: 'P' + (products.length + 1), name, baseUnit });
+            document.getElementById('newProdName').value = '';
+            populateSelects();
+            renderDirectories();
+        }
+
+        function addStore(e) {
+            e.preventDefault();
+            const name = document.getElementById('newStoreName').value.trim();
+            const region = document.getElementById('newStoreRegion').value.trim();
+            if (!name || !region) return;
+            stores.push({ id: 'S' + (stores.length + 1), name, region });
+            document.getElementById('newStoreName').value = '';
+            document.getElementById('newStoreRegion').value = '';
+            populateSelects();
+            renderDirectories();
+        }
+
+        function exportCSV() {
+            let csv = 'Тауар;Сауда нүктесі;Аумақ;Күні;Бастапқы баға;Бірізді баға;Мәртебе\n';
+            records.forEach(r => {
+                const p = products.find(x => x.id === r.productId);
+                const s = stores.find(x => x.id === r.storeId);
+                csv += `${p?.name};${s?.name};${s?.region};${r.date};${r.rawPrice} ₸/${r.rawQty}${r.rawUnit};${r.stdPrice} ₸/${p?.baseUnit};${r.status}\n`;
+            });
+            const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'amat_monitoring_2026.csv';
+            link.click();
+        }
+
+        init();
+    </script>
+</body>
+</html>
